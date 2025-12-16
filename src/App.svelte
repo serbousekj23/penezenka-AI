@@ -23,6 +23,7 @@
   let currentUser = '';
   let showSidebar = false;
   let showConfirmReset = false;
+  let currentView = 'welcome'; // 'welcome' | 'wallet' | 'prices'
 
   // Prices fetched from CoinGecko
   let prices = {};
@@ -133,6 +134,7 @@
       localStorage.setItem(AUTH_KEY, JSON.stringify(payload));
       isAuthenticated = true;
       currentUser = regUsername;
+      currentView = 'welcome';
       // clear reg inputs
       regUsername = '';
       regPassword = '';
@@ -153,6 +155,7 @@
       if(h === payload.hash){
         isAuthenticated = true;
         currentUser = loginUsername;
+        currentView = 'welcome';
         loginUsername = '';
         loginPassword = '';
       } else {
@@ -222,9 +225,12 @@
   {/if}
 
   {#if isAuthenticated}
-    <!-- Topbar with menu and user area -->
+    <!-- Topbar with home, menu and user area -->
     <div class="topbar">
-      <button class="menu-btn" on:click={() => showSidebar = true} aria-label="Open menu">☰</button>
+      <div class="left-area">
+        <button class="home-btn" on:click={() => { currentView = 'welcome'; }} aria-label="Home">🏠</button>
+        <button class="menu-btn" on:click={() => showSidebar = true} aria-label="Open menu">☰</button>
+      </div>
       <div class="topbar-title">Svelte Crypto Wallet</div>
       <div class="user-area">
         <div class="avatar">{currentUser ? currentUser[0].toUpperCase() : '?'}</div>
@@ -232,16 +238,112 @@
       </div>
     </div>
 
-    <div class="card">
-    
-
-    <div class="field card">
-      <label class="muted">Import private key</label>
-      <div class="row" style="margin-top:8px">
-        <input bind:value={importKeyInput} placeholder="0x... nebo bez 0x" style="flex:1" />
-        <button on:click={importPrivateKey}>Import</button>
+    {#if currentView === 'welcome'}
+      <div class="card welcome-card">
+        <h2>Vítejte{#if currentUser}, {currentUser}{/if}!</h2>
+        <p class="muted">Vyberte jednu z možností pro pokračování.</p>
+        <div class="welcome-ctas">
+          <button class="big-cta" on:click={() => currentView = 'wallet'}>Otevřít peněženku</button>
+          <button class="big-cta ghost" on:click={() => currentView = 'prices'}>Souhrn cen</button>
+        </div>
       </div>
-    </div>
+    {/if}
+
+    {#if currentView === 'prices'}
+      <div class="card">
+        <h2>Souhrn cen</h2>
+        <p class="muted">Aktuální tržní ceny (zdroj: CoinGecko)</p>
+        <div style="margin-top:8px">
+          <div class="row" style="justify-content:space-between"><div>Ethereum (ETH)</div><div class="mono">{prices.ethereum ? `$${prices.ethereum.usd}` : '—'}</div></div>
+          <div class="row" style="justify-content:space-between"><div>Bitcoin (BTC)</div><div class="mono">{prices.bitcoin ? `$${prices.bitcoin.usd}` : '—'}</div></div>
+          <div class="row" style="justify-content:space-between"><div>USD Coin (USDC)</div><div class="mono">{prices['usd-coin'] ? `$${prices['usd-coin'].usd}` : '—'}</div></div>
+        </div>
+        <div class="muted" style="margin-top:8px;font-size:12px">Aktualizováno: {pricesLast || '—'}</div>
+        <div style="margin-top:12px" class="row"><button on:click={() => currentView = 'welcome'}>Zpět</button></div>
+      </div>
+    {/if}
+
+    {#if currentView === 'wallet'}
+      <div class="card">
+        <h2>Svelte Crypto Wallet</h2>
+        <p class="muted">Jednoduchá demo peněženka pro generování/import adres (nepoužívejte v produkci bez auditu).</p>
+
+        <div class="field row">
+          <button on:click={createNewWallet}>Nová peněženka</button>
+          <button on:click={reset}>Vyčistit</button>
+          <div style="margin-left:auto">
+            <button on:click={logout}>Odhlásit</button>
+          </div>
+        </div>
+
+        <div class="field card">
+          <label class="muted">Import private key</label>
+          <div class="row" style="margin-top:8px">
+            <input bind:value={importKeyInput} placeholder="0x... nebo bez 0x" style="flex:1" />
+            <button on:click={importPrivateKey}>Import</button>
+          </div>
+        </div>
+
+        <div class="field card" style="margin-top:12px">
+          <label class="muted">Import mnemonic (seed phrase)</label>
+          <div class="row" style="margin-top:8px">
+            <input bind:value={importMnemonicInput} placeholder="slovo1 slovo2 ..." style="flex:1" />
+            <button on:click={importMnemonic}>Import</button>
+          </div>
+        </div>
+
+        {#if address}
+          <div class="field" style="margin-top:12px">
+            <div class="muted">Adresa</div>
+            <div class="mono">{address}</div>
+          </div>
+        {/if}
+
+        {#if balance !== null}
+          <div class="field">
+            <div class="muted">Balance ({network})</div>
+            <div class="mono">{balance} ETH {#if balanceUSD} · ≈ ${balanceUSD} USD{/if}</div>
+          </div>
+        {/if}
+
+        <div class="field card" style="margin-top:12px">
+          <div class="muted">Tržní ceny (zdroj: CoinGecko)</div>
+          <div style="margin-top:8px">
+            <div class="row" style="justify-content:space-between">
+              <div class="muted">Asset</div>
+              <div class="muted">Cena (USD)</div>
+            </div>
+            <div style="margin-top:8px">
+              <div class="row" style="justify-content:space-between"><div>Ethereum (ETH)</div><div class="mono">{prices.ethereum ? `$${prices.ethereum.usd}` : '—'}</div></div>
+              <div class="row" style="justify-content:space-between"><div>Bitcoin (BTC)</div><div class="mono">{prices.bitcoin ? `$${prices.bitcoin.usd}` : '—'}</div></div>
+              <div class="row" style="justify-content:space-between"><div>USD Coin (USDC)</div><div class="mono">{prices['usd-coin'] ? `$${prices['usd-coin'].usd}` : '—'}</div></div>
+            </div>
+            <div class="muted" style="margin-top:8px;font-size:12px">Aktualizováno: {pricesLast || '—'}</div>
+          </div>
+        </div>
+
+        <div class="field" style="margin-top:8px">
+          <label><input type="checkbox" bind:checked={showPrivate} /> Ukázat privátní klíč / mnemonic</label>
+        </div>
+
+        {#if showPrivate}
+          <div class="field">
+            <div class="muted">Private Key</div>
+            <div class="mono">{privateKey || '—'}</div>
+          </div>
+          <div class="field">
+            <div class="muted">Mnemonic / Seed</div>
+            <div class="mono">{mnemonic || '—'}</div>
+          </div>
+        {/if}
+
+        {#if error}
+          <div class="field" style="color:#ffb4b4">Chyba: {error}</div>
+        {/if}
+
+        <p class="muted" style="margin-top:12px">Upozornění: Tento demo projekt zobrazuje privátní klíče v UI — nikdy nesdílejte své klíče a nepoužívejte tuto ukázku s reálnými prostředky bez auditů.</p>
+      </div>
+    {/if}
 
     <!-- Sidebar + overlay -->
     {#if showSidebar}
@@ -254,14 +356,14 @@
       </div>
       <nav>
         <ul>
-          <li><button on:click={() => { showSidebar = false; }}>Přehled zůstatků</button></li>
-          <li><button on:click={() => { showSidebar = false; }}>Transakce (ukázka)</button></li>
-          <li><button on:click={() => { showSidebar = false; }}>Nastavení</button></li>
+          <li><button on:click={() => { showSidebar = false; currentView = 'wallet'; }}>Přehled zůstatků</button></li>
+          <li><button on:click={() => { showSidebar = false; currentView = 'wallet'; }}>Transakce (ukázka)</button></li>
+          <li><button on:click={() => { showSidebar = false; currentView = 'wallet'; }}>Nastavení</button></li>
           <li><button on:click={() => { showConfirmReset = true; }}>Reset účtu</button></li>
         </ul>
       </nav>
     </aside>
-    
+
     {#if showConfirmReset}
       <div class="modal-overlay" on:click={cancelReset}></div>
       <div class="modal" role="dialog" aria-modal="true">
@@ -275,65 +377,5 @@
         </div>
       </div>
     {/if}
-
-    <div class="field card" style="margin-top:12px">
-      <label class="muted">Import mnemonic (seed phrase)</label>
-      <div class="row" style="margin-top:8px">
-        <input bind:value={importMnemonicInput} placeholder="slovo1 slovo2 ..." style="flex:1" />
-        <button on:click={importMnemonic}>Import</button>
-      </div>
-    </div>
-
-    {#if address}
-      <div class="field" style="margin-top:12px">
-        <div class="muted">Adresa</div>
-        <div class="mono">{address}</div>
-      </div>
-    {/if}
-
-    {#if balance !== null}
-      <div class="field">
-        <div class="muted">Balance ({network})</div>
-        <div class="mono">{balance} ETH {#if balanceUSD} · ≈ ${balanceUSD} USD{/if}</div>
-      </div>
-    {/if}
-
-    <div class="field card" style="margin-top:12px">
-      <div class="muted">Tržní ceny (zdroj: CoinGecko)</div>
-      <div style="margin-top:8px">
-        <div class="row" style="justify-content:space-between">
-          <div class="muted">Asset</div>
-          <div class="muted">Cena (USD)</div>
-        </div>
-        <div style="margin-top:8px">
-          <div class="row" style="justify-content:space-between"><div>Ethereum (ETH)</div><div class="mono">{prices.ethereum ? `$${prices.ethereum.usd}` : '—'}</div></div>
-          <div class="row" style="justify-content:space-between"><div>Bitcoin (BTC)</div><div class="mono">{prices.bitcoin ? `$${prices.bitcoin.usd}` : '—'}</div></div>
-          <div class="row" style="justify-content:space-between"><div>USD Coin (USDC)</div><div class="mono">{prices['usd-coin'] ? `$${prices['usd-coin'].usd}` : '—'}</div></div>
-        </div>
-        <div class="muted" style="margin-top:8px;font-size:12px">Aktualizováno: {pricesLast || '—'}</div>
-      </div>
-    </div>
-
-    <div class="field" style="margin-top:8px">
-      <label><input type="checkbox" bind:checked={showPrivate} /> Ukázat privátní klíč / mnemonic</label>
-    </div>
-
-    {#if showPrivate}
-      <div class="field">
-        <div class="muted">Private Key</div>
-        <div class="mono">{privateKey || '—'}</div>
-      </div>
-      <div class="field">
-        <div class="muted">Mnemonic / Seed</div>
-        <div class="mono">{mnemonic || '—'}</div>
-      </div>
-    {/if}
-
-    {#if error}
-      <div class="field" style="color:#ffb4b4">Chyba: {error}</div>
-    {/if}
-
-      <p class="muted" style="margin-top:12px">Upozornění: Tento demo projekt zobrazuje privátní klíče v UI — nikdy nesdílejte své klíče a nepoužívejte tuto ukázku s reálnými prostředky bez auditů.</p>
-    </div>
   {/if}
 </div>
