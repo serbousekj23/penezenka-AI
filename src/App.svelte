@@ -30,7 +30,8 @@
   const TX_KEY = 'wallet_txs';
   const CASH_KEY = 'wallet_cash';
   const CURRENCY_KEY = 'wallet_currency';
-  let portfolio = { ethereum: 0, bitcoin: 0, 'usd-coin': 0 };
+  // Start with no holdings; users begin with only virtual cash
+  let portfolio = {};
   let txs = [];
   // virtualCash is stored in the currently selected base currency
   let virtualCash = 1000; // default will be set on registration/load
@@ -50,7 +51,9 @@
   let pricesLast = null;
   let histPrices = [];
   let chartAsset = 'ethereum';
-  let chartRange = 7;
+  // chartRange is number of days (can be fractional, e.g. 0.0416667 = 1h)
+  let chartRange = '7';
+  let hoverPoint = null;
 
   let importKeyInput = '';
   let importMnemonicInput = '';
@@ -250,6 +253,31 @@
     }).join(' ');
   }
 
+  function pointXYAt(index, w=640, h=200){
+    if(!histPrices || histPrices.length === 0) return null;
+    const n = histPrices.length;
+    const vals = histPrices.map(x => x.v);
+    const min = Math.min(...vals);
+    const max = Math.max(...vals);
+    const pad = 6;
+    const i = Math.max(0, Math.min(n-1, index));
+    const x = pad + (i / (n - 1)) * (w - pad*2);
+    const y = (h - pad) - ((histPrices[i].v - min) / (max - min || 1)) * (h - pad*2);
+    return { x, y, t: histPrices[i].t, v: histPrices[i].v, i };
+  }
+
+  function onChartMouse(e){
+    const svg = e.currentTarget;
+    const rect = svg.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const ratio = Math.max(0, Math.min(1, x / rect.width));
+    const n = histPrices.length;
+    if(n === 0) return;
+    const idx = Math.round(ratio * (n - 1));
+    const p = pointXYAt(idx, 640, 200);
+    hoverPoint = p;
+  }
+
   function setVirtualCash(v){
     const n = Number(v);
     if(isNaN(n) || n < 0) return;
@@ -282,9 +310,10 @@
       isAuthenticated = true;
       currentUser = regUsername;
       currentView = 'welcome';
-      // initialize virtual cash for new user (1000 in base currency)
+      // initialize virtual cash for new user (1000 in base currency) and empty portfolio
       baseCurrency = 'USD';
       virtualCash = 1000;
+      portfolio = {};
       saveState();
       // clear reg inputs
       regUsername = '';
@@ -418,6 +447,8 @@
             <option value="usd-coin">USD Coin (USDC)</option>
           </select>
           <select bind:value={chartRange} style="padding:8px;border-radius:8px">
+            <option value="0.0416667">1h</option>
+            <option value="0.1666667">4h</option>
             <option value="1">1 den</option>
             <option value="7">7 dní</option>
             <option value="30">30 dní</option>
@@ -431,9 +462,16 @@
           {#if histPrices.length === 0}
             <div class="muted">Graf není načten. Klikněte 'Načíst graf'.</div>
           {:else}
-            <div class="chart-container">
-              <svg viewBox="0 0 640 220" preserveAspectRatio="none" width="100%" height="220">
+            <div class="chart-container" style="position:relative">
+              <svg viewBox="0 0 640 220" preserveAspectRatio="none" width="100%" height="220" on:mousemove={onChartMouse} on:mouseleave={() => hoverPoint = null}>
                 <polyline fill="none" stroke="#60a5fa" stroke-width="2" points="{svgPoints(640,200)}" />
+                {#if hoverPoint}
+                  <line x1="{hoverPoint.x}" y1="6" x2="{hoverPoint.x}" y2="214" stroke="rgba(255,255,255,0.12)" stroke-width="1" />
+                  <circle cx="{hoverPoint.x}" cy="{hoverPoint.y}" r="4" fill="#60a5fa" stroke="#07263a" stroke-width="1" />
+                  <rect x="{Math.max(6, hoverPoint.x - 80)}" y="{Math.max(6, hoverPoint.y - 36)}" width="140" height="28" rx="6" fill="#071428" opacity="0.95" />
+                  <text x="{Math.max(14, hoverPoint.x - 74)}" y="{Math.max(24, hoverPoint.y - 16)}" fill="#cfe9ff" font-size="12">{new Date(hoverPoint.t).toLocaleString()}</text>
+                  <text x="{Math.max(14, hoverPoint.x - 74)}" y="{Math.max(40, hoverPoint.y - 2)}" fill="#60a5fa" font-size="12">{formatCurrency(hoverPoint.v)}</text>
+                {/if}
               </svg>
               <div class="muted" style="font-size:12px;margin-top:6px">Rozsah: {chartRange} dní · Měna: {baseCurrency}</div>
             </div>
@@ -492,28 +530,32 @@
       <div class="card">
         <h2>Portfolio</h2>
         <p class="muted">Virtuální hotovost: <strong>{formatCurrency(virtualCash)}</strong></p>
-        <table style="width:100%;margin-top:12px;border-collapse:collapse">
-          <thead>
-            <tr style="text-align:left;border-bottom:1px solid rgba(255,255,255,0.04)">
-              <th>Asset</th>
-              <th>Množství</th>
-              <th>Cena (USD)</th>
-              <th>Hodnota (USD)</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {#each Object.keys(portfolio) as a}
-              <tr style="border-bottom:1px solid rgba(255,255,255,0.02);height:44px">
-                <td style="text-transform:capitalize">{a === 'usd-coin' ? 'USDC' : a === 'ethereum' ? 'ETH' : 'BTC'}</td>
-                <td>{(portfolio[a] || 0).toFixed(6)}</td>
-                <td>{prices[a] ? formatCurrency(prices[a].usd * (fiatRates[baseCurrency] || 1)) : '—'}</td>
-                <td>{prices[a] ? formatCurrency(((portfolio[a]||0) * prices[a].usd) * (fiatRates[baseCurrency] || 1)) : '—'}</td>
-                <td><button class="link" on:click={() => { sellAsset = a; showSellModal = true; }}>Prodat</button></td>
+        {#if Object.keys(portfolio).length === 0}
+          <div class="muted" style="margin-top:12px">Nemáte žádné měny — můžete je koupit tlačítkem níže.</div>
+        {:else}
+          <table style="width:100%;margin-top:12px;border-collapse:collapse">
+            <thead>
+              <tr style="text-align:left;border-bottom:1px solid rgba(255,255,255,0.04)">
+                <th>Asset</th>
+                <th>Množství</th>
+                <th>Cena ({baseCurrency})</th>
+                <th>Hodnota ({baseCurrency})</th>
+                <th></th>
               </tr>
-            {/each}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {#each Object.keys(portfolio) as a}
+                <tr style="border-bottom:1px solid rgba(255,255,255,0.02);height:44px">
+                  <td style="text-transform:capitalize">{a === 'usd-coin' ? 'USDC' : a === 'ethereum' ? 'ETH' : 'BTC'}</td>
+                  <td>{(portfolio[a] || 0).toFixed(6)}</td>
+                  <td>{prices[a] ? formatCurrency(prices[a].usd * (fiatRates[baseCurrency] || 1)) : '—'}</td>
+                  <td>{prices[a] ? formatCurrency(((portfolio[a]||0) * prices[a].usd) * (fiatRates[baseCurrency] || 1)) : '—'}</td>
+                  <td><button class="link" on:click={() => { sellAsset = a; showSellModal = true; }}>Prodat</button></td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        {/if}
         <div style="margin-top:12px" class="row">
           <button on:click={openBuy}>Koupit</button>
           <button on:click={() => currentView = 'transactions'} style="margin-left:auto">Zobrazit transakce</button>
@@ -616,21 +658,7 @@
             <div class="muted" style="margin-top:8px">Aktuální zůstatek: {formatCurrency(virtualCash)}</div>
           </div>
           <div class="modal-actions">
-            <button on:click={() => {
-              // convert virtualCash to newly selected baseCurrency using fiatRates
-              const old = localStorage.getItem(CURRENCY_KEY) || 'USD';
-              const oldRate = fiatRates[old] || 1;
-              const newRate = fiatRates[baseCurrency] || 1;
-              // if rates available, adjust stored cash amount so the USD-equivalent remains
-              // compute USD equivalent of current cash: usdEquivalent = virtualCash / oldRate
-              // then new cash = usdEquivalent * newRate
-              try{
-                const usdEquivalent = (virtualCash / oldRate) || 0;
-                virtualCash = Number((usdEquivalent * newRate).toFixed(2));
-              } catch(e){ console.warn('Conversion error', e); }
-              saveState();
-              closeSettings();
-            }}>Uložit</button>
+            <button on:click={() => { saveState(); closeSettings(); }}>Uložit</button>
             <button class="link" on:click={closeSettings}>Zrušit</button>
           </div>
         </div>
