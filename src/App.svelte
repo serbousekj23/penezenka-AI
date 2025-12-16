@@ -29,9 +29,13 @@
   const PORTFOLIO_KEY = 'wallet_portfolio';
   const TX_KEY = 'wallet_txs';
   const CASH_KEY = 'wallet_cash';
+  const CURRENCY_KEY = 'wallet_currency';
   let portfolio = { ethereum: 0, bitcoin: 0, 'usd-coin': 0 };
   let txs = [];
-  let virtualCash = 1000; // USD
+  // virtualCash is stored in the currently selected base currency
+  let virtualCash = 1000; // default will be set on registration/load
+  let baseCurrency = 'USD';
+  let fiatRates = { USD: 1 }; // USD -> other fiat rates
   let showBuyModal = false;
   let showSettings = false;
   let buyAssetSelect = 'ethereum';
@@ -44,6 +48,9 @@
   // Prices fetched from CoinGecko
   let prices = {};
   let pricesLast = null;
+  let histPrices = [];
+  let chartAsset = 'ethereum';
+  let chartRange = 7;
 
   let importKeyInput = '';
   let importMnemonicInput = '';
@@ -134,6 +141,8 @@
       const t = localStorage.getItem(TX_KEY);
       if(t) txs = JSON.parse(t);
       const c = localStorage.getItem(CASH_KEY);
+      const savedCurrency = localStorage.getItem(CURRENCY_KEY) || 'USD';
+      baseCurrency = savedCurrency;
       if(c) virtualCash = Number(c);
     } catch(e){ console.warn('Load state error', e); }
   }
@@ -143,6 +152,7 @@
       localStorage.setItem(PORTFOLIO_KEY, JSON.stringify(portfolio));
       localStorage.setItem(TX_KEY, JSON.stringify(txs));
       localStorage.setItem(CASH_KEY, String(virtualCash));
+      localStorage.setItem(CURRENCY_KEY, baseCurrency);
     } catch(e){ console.warn('Save state error', e); }
   }
 
@@ -159,13 +169,16 @@
     error = '';
     const qty = Number(buyQty);
     if(!qty || qty <= 0){ error = 'Zadejte množství aktiva větší než 0'; return; }
-    const price = prices?.[buyAssetSelect]?.usd;
-    if(!price){ error = 'Cena není načtena'; return; }
-    const usd = Number((qty * price).toFixed(2));
-    if(usd > virtualCash){ error = 'Nedostatek virtuálních prostředků'; return; }
+    const priceUSD = prices?.[buyAssetSelect]?.usd;
+    if(!priceUSD){ error = 'Cena není načtena'; return; }
+    // compute price and cost in base currency
+    const rate = fiatRates[baseCurrency] || 1;
+    const priceInBase = Number((priceUSD * rate).toFixed(6));
+    const costInBase = Number((qty * priceInBase).toFixed(2));
+    if(costInBase > virtualCash){ error = 'Nedostatek virtuálních prostředků'; return; }
     portfolio[buyAssetSelect] = (portfolio[buyAssetSelect] || 0) + qty;
-    virtualCash = Number((virtualCash - usd).toFixed(2));
-    const tx = { type:'buy', asset: buyAssetSelect, qty, usd, price, time: Date.now() };
+    virtualCash = Number((virtualCash - costInBase).toFixed(2));
+    const tx = { type:'buy', asset: buyAssetSelect, qty, usd: Number((qty*priceUSD).toFixed(2)), priceUSD, priceInBase, costInBase, currency: baseCurrency, time: Date.now() };
     addTx(tx);
     saveState();
     showBuyModal = false;
@@ -174,20 +187,67 @@
 
   function doSell(){
     error = '';
-    const amt = Number(sellAmount);
-    if(!amt || amt <= 0){ error = 'Zadejte množství k prodeji'; return; }
+    let amt = Number(sellAmount);
     if(!sellAsset){ error = 'Vyberte aktivum'; return; }
+    if(!amt || amt <= 0){ error = 'Zadejte množství k prodeji'; return; }
     if((portfolio[sellAsset] || 0) < amt){ error = 'Nedostatečný počet měny'; return; }
-    const price = prices?.[sellAsset]?.usd;
-    if(!price){ error = 'Cena není načtena'; return; }
-    const usd = Number((amt * price).toFixed(2));
+    const priceUSD = prices?.[sellAsset]?.usd;
+    if(!priceUSD){ error = 'Cena není načtena'; return; }
+    const rate = fiatRates[baseCurrency] || 1;
+    const priceInBase = Number((priceUSD * rate).toFixed(6));
+    const usd = Number((amt * priceUSD).toFixed(2));
+    const proceedsInBase = Number((amt * priceInBase).toFixed(2));
     portfolio[sellAsset] = Math.max(0, (portfolio[sellAsset] || 0) - amt);
-    virtualCash = Number((virtualCash + usd).toFixed(2));
-    const tx = { type:'sell', asset: sellAsset, qty: amt, usd, price, time: Date.now() };
+    virtualCash = Number((virtualCash + proceedsInBase).toFixed(2));
+    const tx = { type:'sell', asset: sellAsset, qty: amt, usd, priceUSD, priceInBase, proceedsInBase, currency: baseCurrency, time: Date.now() };
     addTx(tx);
     saveState();
     sellAmount = '';
     sellAsset = '';
+  }
+
+  // Fetch fiat exchange rates (USD base)
+  async function fetchFiatRates(){
+    try{
+      const res = await fetch('https://api.exchangerate.host/latest?base=USD&symbols=USD,EUR,CZK');
+      if(!res.ok) throw new Error('Fiat rates fetch failed');
+      const data = await res.json();
+      fiatRates = data.rates || { USD:1 };
+    } catch(e){ console.warn('Fiat rates error', e); fiatRates = { USD:1 }; }
+  }
+
+  function formatCurrency(amount){
+    const sym = baseCurrency === 'USD' ? '$' : baseCurrency === 'EUR' ? '€' : 'Kč';
+    if(amount == null) return `- ${baseCurrency}`;
+    return `${sym}${Number(amount).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+  }
+
+  // Charts: fetch historical market data from CoinGecko (prices in USD) and store
+  async function fetchChartData(asset, days){
+    histPrices = [];
+    try{
+      const res = await fetch(`https://api.coingecko.com/api/v3/coins/${asset}/market_chart?vs_currency=usd&days=${days}`);
+      if(!res.ok) throw new Error('Chart fetch failed');
+      const data = await res.json();
+      // data.prices is [[ts, price], ...]
+      // convert to numbers (price in base currency if needed)
+      const rate = fiatRates[baseCurrency] || 1;
+      histPrices = (data.prices || []).map(p => ({ t: p[0], v: Number((p[1] * rate).toFixed(6)) }));
+    } catch(e){ console.warn('Chart error', e); histPrices = []; }
+  }
+
+  function svgPoints(w=640,h=200){
+    if(!histPrices || histPrices.length === 0) return '';
+    const n = histPrices.length;
+    const vals = histPrices.map(x => x.v);
+    const min = Math.min(...vals);
+    const max = Math.max(...vals);
+    const pad = 6;
+    return histPrices.map((pt, i) => {
+      const x = pad + (i / (n - 1)) * (w - pad*2);
+      const y = (h - pad) - ((pt.v - min) / (max - min || 1)) * (h - pad*2);
+      return `${x},${y}`;
+    }).join(' ');
   }
 
   function setVirtualCash(v){
@@ -222,8 +282,10 @@
       isAuthenticated = true;
       currentUser = regUsername;
       currentView = 'welcome';
-      // load portfolio state after registration
-      loadState();
+      // initialize virtual cash for new user (1000 in base currency)
+      baseCurrency = 'USD';
+      virtualCash = 1000;
+      saveState();
       // clear reg inputs
       regUsername = '';
       regPassword = '';
@@ -275,7 +337,12 @@
 
   onMount(()=>{
     provider = getDefaultProvider(network);
-    fetchPrices();
+    // fetch fiat rates first, then load saved state so currency conversion is available
+    fetchFiatRates().then(()=>{
+      loadState();
+      // update UI prices after state loaded
+      fetchPrices();
+    });
     // refresh prices every 30 seconds
     const tid = setInterval(fetchPrices, 30000);
     return ()=> clearInterval(tid);
@@ -324,7 +391,7 @@
       <div class="topbar-title">Svelte Crypto Wallet</div>
       <div class="user-area">
         <div class="avatar">{currentUser ? currentUser[0].toUpperCase() : '?'}</div>
-        <div class="cash-inline">{virtualCash} USD</div>
+        <div class="cash-inline">{formatCurrency(virtualCash)}</div>
         <button class="link" on:click={logout}>Odhlásit</button>
       </div>
     </div>
@@ -337,6 +404,42 @@
           <button class="big-cta" on:click={() => currentView = 'wallet'}>Otevřít peněženku</button>
           <button class="big-cta ghost" on:click={() => currentView = 'prices'}>Souhrn cen</button>
         </div>
+      </div>
+    {/if}
+
+    {#if currentView === 'charts'}
+      <div class="card">
+        <h2>Grafy cen</h2>
+        <p class="muted">Vyberte aktivum a časové rozmezí</p>
+        <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
+          <select bind:value={chartAsset} style="padding:8px;border-radius:8px">
+            <option value="ethereum">Ethereum (ETH)</option>
+            <option value="bitcoin">Bitcoin (BTC)</option>
+            <option value="usd-coin">USD Coin (USDC)</option>
+          </select>
+          <select bind:value={chartRange} style="padding:8px;border-radius:8px">
+            <option value="1">1 den</option>
+            <option value="7">7 dní</option>
+            <option value="30">30 dní</option>
+            <option value="90">90 dní</option>
+            <option value="365">365 dní</option>
+          </select>
+          <button on:click={() => fetchChartData(chartAsset, chartRange)}>Načíst graf</button>
+          <div style="margin-left:auto" class="muted">Aktuální (poslední): {histPrices.length ? formatCurrency(histPrices[histPrices.length-1].v) : '—'}</div>
+        </div>
+        <div style="margin-top:12px">
+          {#if histPrices.length === 0}
+            <div class="muted">Graf není načten. Klikněte 'Načíst graf'.</div>
+          {:else}
+            <div class="chart-container">
+              <svg viewBox="0 0 640 220" preserveAspectRatio="none" width="100%" height="220">
+                <polyline fill="none" stroke="#60a5fa" stroke-width="2" points="{svgPoints(640,200)}" />
+              </svg>
+              <div class="muted" style="font-size:12px;margin-top:6px">Rozsah: {chartRange} dní · Měna: {baseCurrency}</div>
+            </div>
+          {/if}
+        </div>
+        <div style="margin-top:12px" class="row"><button on:click={() => currentView = 'welcome'}>Zpět</button></div>
       </div>
     {/if}
 
@@ -376,9 +479,9 @@
         <h2>Souhrn cen</h2>
         <p class="muted">Aktuální tržní ceny (zdroj: CoinGecko)</p>
         <div style="margin-top:8px">
-          <div class="row" style="justify-content:space-between"><div>Ethereum (ETH)</div><div class="mono">{prices.ethereum ? `$${prices.ethereum.usd}` : '—'}</div></div>
-          <div class="row" style="justify-content:space-between"><div>Bitcoin (BTC)</div><div class="mono">{prices.bitcoin ? `$${prices.bitcoin.usd}` : '—'}</div></div>
-          <div class="row" style="justify-content:space-between"><div>USD Coin (USDC)</div><div class="mono">{prices['usd-coin'] ? `$${prices['usd-coin'].usd}` : '—'}</div></div>
+          <div class="row" style="justify-content:space-between"><div>Ethereum (ETH)</div><div class="mono">{prices.ethereum ? formatCurrency(prices.ethereum.usd * (fiatRates[baseCurrency]||1)) : '—'}</div></div>
+          <div class="row" style="justify-content:space-between"><div>Bitcoin (BTC)</div><div class="mono">{prices.bitcoin ? formatCurrency(prices.bitcoin.usd * (fiatRates[baseCurrency]||1)) : '—'}</div></div>
+          <div class="row" style="justify-content:space-between"><div>USD Coin (USDC)</div><div class="mono">{prices['usd-coin'] ? formatCurrency(prices['usd-coin'].usd * (fiatRates[baseCurrency]||1)) : '—'}</div></div>
         </div>
         <div class="muted" style="margin-top:8px;font-size:12px">Aktualizováno: {pricesLast || '—'}</div>
         <div style="margin-top:12px" class="row"><button on:click={() => currentView = 'welcome'}>Zpět</button></div>
@@ -388,7 +491,7 @@
     {#if currentView === 'wallet'}
       <div class="card">
         <h2>Portfolio</h2>
-        <p class="muted">Virtuální hotovost: <strong>${virtualCash} USD</strong></p>
+        <p class="muted">Virtuální hotovost: <strong>{formatCurrency(virtualCash)}</strong></p>
         <table style="width:100%;margin-top:12px;border-collapse:collapse">
           <thead>
             <tr style="text-align:left;border-bottom:1px solid rgba(255,255,255,0.04)">
@@ -404,8 +507,8 @@
               <tr style="border-bottom:1px solid rgba(255,255,255,0.02);height:44px">
                 <td style="text-transform:capitalize">{a === 'usd-coin' ? 'USDC' : a === 'ethereum' ? 'ETH' : 'BTC'}</td>
                 <td>{(portfolio[a] || 0).toFixed(6)}</td>
-                <td>{prices[a] ? `$${prices[a].usd}` : '—'}</td>
-                <td>{prices[a] ? `$${((portfolio[a]||0) * prices[a].usd).toFixed(2)}` : '—'}</td>
+                <td>{prices[a] ? formatCurrency(prices[a].usd * (fiatRates[baseCurrency] || 1)) : '—'}</td>
+                <td>{prices[a] ? formatCurrency(((portfolio[a]||0) * prices[a].usd) * (fiatRates[baseCurrency] || 1)) : '—'}</td>
                 <td><button class="link" on:click={() => { sellAsset = a; showSellModal = true; }}>Prodat</button></td>
               </tr>
             {/each}
@@ -431,6 +534,7 @@
         <ul>
           <li><button on:click={() => { showSidebar = false; currentView = 'wallet'; }}>Přehled zůstatků</button></li>
           <li><button on:click={() => { showSidebar = false; currentView = 'transactions'; }}>Transakce</button></li>
+          <li><button on:click={() => { showSidebar = false; currentView = 'charts'; }}>Grafy</button></li>
           <li><button on:click={() => { showSidebar = false; openBuy(); }}>Zakoupit</button></li>
           <li><button on:click={() => { showSidebar = false; openSettings(); }}>Nastavení</button></li>
           <li><button on:click={() => { showConfirmReset = true; }}>Reset účtu</button></li>
@@ -466,7 +570,7 @@
             </select>
             <label class="muted" style="margin-top:8px">Množství aktiva k nákupu</label>
             <input bind:value={buyQty} placeholder="např. 0.01" style="width:100%;margin-top:6px" />
-            <div class="muted" style="margin-top:8px">{#if prices[buyAssetSelect]}Přibližná cena: {(buyQty && !isNaN(Number(buyQty)) ? (Number(buyQty)*prices[buyAssetSelect].usd).toFixed(2) : '—')} USD{/if}</div>
+            <div class="muted" style="margin-top:8px">{#if prices[buyAssetSelect]}Přibližná cena: {(buyQty && !isNaN(Number(buyQty)) ? formatCurrency(Number(buyQty)*prices[buyAssetSelect].usd*(fiatRates[baseCurrency]||1)) : '—')}{/if}</div>
           </div>
           <div class="modal-actions">
             <button on:click={doBuy}>Koupit</button>
@@ -483,8 +587,11 @@
           <h3>Prodej {sellAsset === 'usd-coin' ? 'USDC' : sellAsset === 'ethereum' ? 'ETH' : 'BTC'}</h3>
           <div style="margin-top:8px">
             <label class="muted">Množství</label>
-            <input bind:value={sellAmount} placeholder="Množství k prodeji" style="width:100%;margin-top:6px" />
-            <div class="muted" style="margin-top:8px">{#if prices[sellAsset]}Přibližně {(sellAmount && !isNaN(Number(sellAmount)) ? (Number(sellAmount)*prices[sellAsset].usd).toFixed(2) : '—')} USD{/if}</div>
+              <input bind:value={sellAmount} placeholder="Množství k prodeji" style="width:100%;margin-top:6px" />
+              <div class="row" style="margin-top:8px;gap:8px">
+                <button on:click={() => { sellAmount = (portfolio[sellAsset] || 0).toString(); }}>Prodat vše</button>
+                <div class="muted">{#if prices[sellAsset]}Přibližně {(sellAmount && !isNaN(Number(sellAmount)) ? formatCurrency(Number(sellAmount)*prices[sellAsset].usd*(fiatRates[baseCurrency]||1)) : '—')}{/if}</div>
+              </div>
           </div>
           <div class="modal-actions">
             <button on:click={() => { doSell(); showSellModal = false; }}>Prodat</button>
@@ -500,12 +607,30 @@
         <div class="modal-content">
           <h3>Nastavení</h3>
           <div style="margin-top:8px">
-            <label class="muted">Virtuální hotovost (USD)</label>
-            <input bind:value={settingsCash} placeholder="Např. 1000" style="width:100%;margin-top:6px" />
-            <div class="muted" style="margin-top:8px">Aktuální: {virtualCash} USD</div>
+            <label class="muted">Použitá měna</label>
+            <select bind:value={baseCurrency} style="width:100%;margin-top:6px">
+              <option value="USD">USD</option>
+              <option value="EUR">EUR</option>
+              <option value="CZK">CZK</option>
+            </select>
+            <div class="muted" style="margin-top:8px">Aktuální zůstatek: {formatCurrency(virtualCash)}</div>
           </div>
           <div class="modal-actions">
-            <button on:click={() => { setVirtualCash(settingsCash); closeSettings(); }}>Uložit</button>
+            <button on:click={() => {
+              // convert virtualCash to newly selected baseCurrency using fiatRates
+              const old = localStorage.getItem(CURRENCY_KEY) || 'USD';
+              const oldRate = fiatRates[old] || 1;
+              const newRate = fiatRates[baseCurrency] || 1;
+              // if rates available, adjust stored cash amount so the USD-equivalent remains
+              // compute USD equivalent of current cash: usdEquivalent = virtualCash / oldRate
+              // then new cash = usdEquivalent * newRate
+              try{
+                const usdEquivalent = (virtualCash / oldRate) || 0;
+                virtualCash = Number((usdEquivalent * newRate).toFixed(2));
+              } catch(e){ console.warn('Conversion error', e); }
+              saveState();
+              closeSettings();
+            }}>Uložit</button>
             <button class="link" on:click={closeSettings}>Zrušit</button>
           </div>
         </div>
