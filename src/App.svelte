@@ -11,6 +11,16 @@
   let error = '';
   let provider = null;
 
+  // Simple auth
+  const AUTH_KEY = 'wallet_auth';
+  let isAuthenticated = false;
+  let authMode = 'login'; // 'login' | 'register'
+  let loginUsername = '';
+  let loginPassword = '';
+  let regUsername = '';
+  let regPassword = '';
+  let regConfirm = '';
+
   // Prices fetched from CoinGecko
   let prices = {};
   let pricesLast = null;
@@ -96,6 +106,61 @@
     }
   }
 
+  // --- Auth helpers ---
+  function buf2hex(buffer){
+    return Array.prototype.map.call(new Uint8Array(buffer), x => ('00' + x.toString(16)).slice(-2)).join('');
+  }
+
+  async function hashPassword(pw){
+    const enc = new TextEncoder();
+    const data = enc.encode(pw);
+    const hashBuf = await crypto.subtle.digest('SHA-256', data);
+    return buf2hex(hashBuf);
+  }
+
+  async function register(){
+    error = '';
+    if(!regUsername) { error = 'Uživatelské jméno je povinné'; return; }
+    if(!regPassword) { error = 'Heslo nesmí být prázdné'; return; }
+    if(regPassword.length < 8){ error = 'Heslo musí mít minimálně 8 znaků'; return; }
+    if(regPassword !== regConfirm){ error = 'Hesla se neshodují'; return; }
+    try{
+      const h = await hashPassword(regPassword);
+      const payload = { username: regUsername, hash: h };
+      localStorage.setItem(AUTH_KEY, JSON.stringify(payload));
+      isAuthenticated = true;
+      // clear reg inputs
+      regUsername = '';
+      regPassword = '';
+      regConfirm = '';
+    } catch(e){ error = e.message }
+  }
+
+  async function login(){
+    error = '';
+    const stored = localStorage.getItem(AUTH_KEY);
+    if(!stored){ error = 'Žádný účet není registrován — zaregistrujte se nejdříve'; return; }
+    try{
+      const payload = JSON.parse(stored);
+      if(!loginUsername){ error = 'Uživatelské jméno je povinné'; return; }
+      if(!loginPassword || loginPassword.length < 8){ error = 'Heslo musí mít minimálně 8 znaků'; return; }
+      if(payload.username !== loginUsername){ error = 'Uživatelské jméno neexistuje'; return; }
+      const h = await hashPassword(loginPassword);
+      if(h === payload.hash){
+        isAuthenticated = true;
+        loginUsername = '';
+        loginPassword = '';
+      } else {
+        error = 'Nesprávné heslo';
+      }
+    } catch(e){ error = e.message }
+  }
+
+  function logout(){
+    isAuthenticated = false;
+    reset();
+  }
+
   onMount(()=>{
     provider = getDefaultProvider(network);
     fetchPrices();
@@ -106,8 +171,49 @@
 </script>
 
 <div class="container">
-  <div class="card">
-    <h2>Svelte Crypto Wallet</h2>
+  {#if !isAuthenticated}
+    <div class="card">
+      <h2>Svelte Crypto Wallet — Přihlášení</h2>
+      <p class="muted">Pro přístup k peněžence se musíte přihlásit nebo zaregistrovat lokálně (demo).</p>
+
+      <div class="field card">
+        <label class="muted">Přihlásit</label>
+        <div class="row" style="margin-top:8px">
+          <input bind:value={loginUsername} placeholder="Uživatelské jméno" style="flex:1;margin-right:8px" />
+          <input type="password" bind:value={loginPassword} placeholder="Heslo" style="flex:1;margin-right:8px" />
+          <button on:click={login}>Přihlásit</button>
+        </div>
+      </div>
+
+      <div class="field card" style="margin-top:12px">
+        <label class="muted">Registrovat nový účet</label>
+        <div style="margin-top:8px">
+          <input bind:value={regUsername} placeholder="Uživatelské jméno" style="width:100%;margin-bottom:8px" />
+          <input type="password" bind:value={regPassword} placeholder="Nové heslo (min. 8 znaků)" style="width:100%;margin-bottom:8px" />
+          <input type="password" bind:value={regConfirm} placeholder="Potvrzení hesla" style="width:100%;margin-bottom:8px" />
+          <div class="row"><button on:click={register}>Registrovat</button></div>
+        </div>
+      </div>
+
+      {#if error}
+        <div class="field" style="color:#ffb4b4">Chyba: {error}</div>
+      {/if}
+
+    </div>
+  {/if}
+
+  {#if isAuthenticated}
+    <div class="card">
+      <h2>Svelte Crypto Wallet</h2>
+      <p class="muted">Jednoduchá demo peněženka pro generování/import adres (nepoužívejte v produkci bez auditu).</p>
+
+      <div class="field row">
+        <button on:click={createNewWallet}>Nová peněženka</button>
+        <button on:click={reset}>Vyčistit</button>
+        <div style="margin-left:auto">
+          <button on:click={logout}>Odhlásit</button>
+        </div>
+      </div>
     <p class="muted">Jednoduchá demo peněženka pro generování/import adres (nepoužívejte v produkci bez auditu).</p>
 
     <div class="field row">
@@ -188,6 +294,7 @@
       <div class="field" style="color:#ffb4b4">Chyba: {error}</div>
     {/if}
 
-    <p class="muted" style="margin-top:12px">Upozornění: Tento demo projekt zobrazuje privátní klíče v UI — nikdy nesdílejte své klíče a nepoužívejte tuto ukázku s reálnými prostředky bez auditů.</p>
-  </div>
+      <p class="muted" style="margin-top:12px">Upozornění: Tento demo projekt zobrazuje privátní klíče v UI — nikdy nesdílejte své klíče a nepoužívejte tuto ukázku s reálnými prostředky bez auditů.</p>
+    </div>
+  {/if}
 </div>

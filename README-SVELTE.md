@@ -18,6 +18,7 @@ Funkce:
 - Import pomocí private key nebo mnemonic
 - Načtení ETH zůstatku z veřejného provideru (default provider)
  - Zobrazení tržních cen (ETH, BTC, USDC) a přepočet ETH zůstatku na USD (CoinGecko)
+ - Lokální přihlášení/registrace: přístup k peněžence je možný jen po přihlášení (demo, hash hesla ukládán v localStorage)
 
 Další kroky:
 - Přidat šifrování seedů v lokálním úložišti
