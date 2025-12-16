@@ -45,6 +45,12 @@
   let sellAmount = '';
   let showSellModal = false;
   let settingsCash = '';
+  // Predefined list of well-known assets (no user-added assets)
+  let knownAssets = [
+    'bitcoin','ethereum','cardano','solana','dogecoin','polkadot','litecoin','ripple','binancecoin',
+    'tron','avalanche-2','chainlink','stellar','theta-token','vechain','monero','dash','zcash'
+  ];
+  let prevCurrency = 'USD';
 
   // Prices fetched from CoinGecko
   let prices = {};
@@ -121,7 +127,8 @@
   async function fetchPrices(){
     try{
       // CoinGecko simple price endpoint (no API key required)
-      const res = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=ethereum,bitcoin,usd-coin&vs_currencies=usd');
+      const ids = (knownAssets && knownAssets.length) ? knownAssets.join(',') : 'ethereum,bitcoin';
+      const res = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd`);
       if(!res.ok) throw new Error('Price fetch failed');
       const data = await res.json();
       prices = data;
@@ -139,23 +146,28 @@
   // Local portfolio helpers
   function loadState(){
     try{
-      const p = localStorage.getItem(PORTFOLIO_KEY);
+      // load per-user data when currentUser is set
+      const userSuffix = currentUser ? `_${currentUser}` : '';
+      const p = localStorage.getItem(PORTFOLIO_KEY + userSuffix);
       if(p) portfolio = JSON.parse(p);
-      const t = localStorage.getItem(TX_KEY);
+      const t = localStorage.getItem(TX_KEY + userSuffix);
       if(t) txs = JSON.parse(t);
-      const c = localStorage.getItem(CASH_KEY);
-      const savedCurrency = localStorage.getItem(CURRENCY_KEY) || 'USD';
+      const c = localStorage.getItem(CASH_KEY + userSuffix);
+      const savedCurrency = localStorage.getItem(CURRENCY_KEY + userSuffix) || localStorage.getItem(CURRENCY_KEY) || 'USD';
       baseCurrency = savedCurrency;
       if(c) virtualCash = Number(c);
+      // knownAssets is a fixed list; do not load user-added assets
     } catch(e){ console.warn('Load state error', e); }
   }
 
   function saveState(){
     try{
-      localStorage.setItem(PORTFOLIO_KEY, JSON.stringify(portfolio));
-      localStorage.setItem(TX_KEY, JSON.stringify(txs));
-      localStorage.setItem(CASH_KEY, String(virtualCash));
-      localStorage.setItem(CURRENCY_KEY, baseCurrency);
+      const userSuffix = currentUser ? `_${currentUser}` : '';
+      localStorage.setItem(PORTFOLIO_KEY + userSuffix, JSON.stringify(portfolio));
+      localStorage.setItem(TX_KEY + userSuffix, JSON.stringify(txs));
+      localStorage.setItem(CASH_KEY + userSuffix, String(virtualCash));
+      localStorage.setItem(CURRENCY_KEY + userSuffix, baseCurrency);
+      // knownAssets is fixed; do not persist user-added assets
     } catch(e){ console.warn('Save state error', e); }
   }
 
@@ -208,6 +220,7 @@
     sellAmount = '';
     sellAsset = '';
   }
+
 
   // Fetch fiat exchange rates (USD base)
   async function fetchFiatRates(){
@@ -387,8 +400,8 @@
       <div class="field card">
         <label class="muted">Přihlásit</label>
         <div class="row" style="margin-top:8px">
-          <input bind:value={loginUsername} placeholder="Uživatelské jméno" style="flex:1;margin-right:8px" />
-          <input type="password" bind:value={loginPassword} placeholder="Heslo" style="flex:1;margin-right:8px" />
+          <input name="username" autocomplete="off" autocorrect="off" spellcheck="false" bind:value={loginUsername} placeholder="Uživatelské jméno" style="flex:1;margin-right:8px" />
+          <input name="password" autocomplete="new-password" autocorrect="off" spellcheck="false" type="password" bind:value={loginPassword} placeholder="Heslo" style="flex:1;margin-right:8px" />
           <button on:click={login}>Přihlásit</button>
         </div>
       </div>
@@ -396,9 +409,9 @@
       <div class="field card" style="margin-top:12px">
         <label class="muted">Registrovat nový účet</label>
         <div style="margin-top:8px">
-          <input bind:value={regUsername} placeholder="Uživatelské jméno" style="width:100%;margin-bottom:8px" />
-          <input type="password" bind:value={regPassword} placeholder="Nové heslo (min. 8 znaků)" style="width:100%;margin-bottom:8px" />
-          <input type="password" bind:value={regConfirm} placeholder="Potvrzení hesla" style="width:100%;margin-bottom:8px" />
+          <input name="regUsername" autocomplete="off" autocorrect="off" spellcheck="false" bind:value={regUsername} placeholder="Uživatelské jméno" style="width:100%;margin-bottom:8px" />
+          <input name="regPassword" autocomplete="new-password" autocorrect="off" spellcheck="false" type="password" bind:value={regPassword} placeholder="Nové heslo (min. 8 znaků)" style="width:100%;margin-bottom:8px" />
+          <input name="regConfirm" autocomplete="new-password" autocorrect="off" spellcheck="false" type="password" bind:value={regConfirm} placeholder="Potvrzení hesla" style="width:100%;margin-bottom:8px" />
           <div class="row"><button on:click={register}>Registrovat</button></div>
         </div>
       </div>
@@ -442,9 +455,9 @@
         <p class="muted">Vyberte aktivum a časové rozmezí</p>
         <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
           <select bind:value={chartAsset} style="padding:8px;border-radius:8px">
-            <option value="ethereum">Ethereum (ETH)</option>
-            <option value="bitcoin">Bitcoin (BTC)</option>
-            <option value="usd-coin">USD Coin (USDC)</option>
+            {#each knownAssets as ka}
+              <option value="{ka}">{ka}</option>
+            {/each}
           </select>
           <select bind:value={chartRange} style="padding:8px;border-radius:8px">
             <option value="0.0416667">1h</option>
@@ -497,10 +510,10 @@
                 {#each txs as t}
                   <tr style="height:40px;border-bottom:1px solid rgba(255,255,255,0.02)">
                     <td>{t.type === 'buy' ? 'Nákup' : 'Prodej'}</td>
-                    <td>{t.asset === 'usd-coin' ? 'USDC' : t.asset === 'ethereum' ? 'ETH' : 'BTC'}</td>
+                    <td>{t.asset}</td>
                     <td>{t.qty.toFixed(6)}</td>
-                    <td>${t.usd}</td>
-                    <td>${t.price}</td>
+                    <td>{t.usd ? `$${t.usd}` : '—'}</td>
+                    <td>{t.priceUSD ? `$${t.priceUSD}` : (t.price ? `$${t.price}` : '—')}</td>
                     <td>{new Date(t.time).toLocaleString()}</td>
                   </tr>
                 {/each}
@@ -517,9 +530,9 @@
         <h2>Souhrn cen</h2>
         <p class="muted">Aktuální tržní ceny (zdroj: CoinGecko)</p>
         <div style="margin-top:8px">
-          <div class="row" style="justify-content:space-between"><div>Ethereum (ETH)</div><div class="mono">{prices.ethereum ? formatCurrency(prices.ethereum.usd * (fiatRates[baseCurrency]||1)) : '—'}</div></div>
-          <div class="row" style="justify-content:space-between"><div>Bitcoin (BTC)</div><div class="mono">{prices.bitcoin ? formatCurrency(prices.bitcoin.usd * (fiatRates[baseCurrency]||1)) : '—'}</div></div>
-          <div class="row" style="justify-content:space-between"><div>USD Coin (USDC)</div><div class="mono">{prices['usd-coin'] ? formatCurrency(prices['usd-coin'].usd * (fiatRates[baseCurrency]||1)) : '—'}</div></div>
+          {#each knownAssets as a}
+            <div class="row" style="justify-content:space-between"><div style="text-transform:capitalize">{a}</div><div class="mono">{prices[a] ? formatCurrency(prices[a].usd * (fiatRates[baseCurrency]||1)) : '—'}</div></div>
+          {/each}
         </div>
         <div class="muted" style="margin-top:8px;font-size:12px">Aktualizováno: {pricesLast || '—'}</div>
         <div style="margin-top:12px" class="row"><button on:click={() => currentView = 'welcome'}>Zpět</button></div>
@@ -546,7 +559,7 @@
             <tbody>
               {#each Object.keys(portfolio) as a}
                 <tr style="border-bottom:1px solid rgba(255,255,255,0.02);height:44px">
-                  <td style="text-transform:capitalize">{a === 'usd-coin' ? 'USDC' : a === 'ethereum' ? 'ETH' : 'BTC'}</td>
+                  <td style="text-transform:capitalize">{a}</td>
                   <td>{(portfolio[a] || 0).toFixed(6)}</td>
                   <td>{prices[a] ? formatCurrency(prices[a].usd * (fiatRates[baseCurrency] || 1)) : '—'}</td>
                   <td>{prices[a] ? formatCurrency(((portfolio[a]||0) * prices[a].usd) * (fiatRates[baseCurrency] || 1)) : '—'}</td>
@@ -606,9 +619,9 @@
           <div style="margin-top:8px">
             <label class="muted">Asset</label>
             <select bind:value={buyAssetSelect} style="width:100%;margin-top:6px">
-              <option value="ethereum">Ethereum (ETH)</option>
-              <option value="bitcoin">Bitcoin (BTC)</option>
-              <option value="usd-coin">USD Coin (USDC)</option>
+              {#each knownAssets as ka}
+                <option value="{ka}">{ka}</option>
+              {/each}
             </select>
             <label class="muted" style="margin-top:8px">Množství aktiva k nákupu</label>
             <input bind:value={buyQty} placeholder="např. 0.01" style="width:100%;margin-top:6px" />
@@ -622,11 +635,13 @@
       </div>
     {/if}
 
+    <!-- User-added assets have been removed; knownAssets is a fixed list -->
+
     {#if showSellModal}
       <div class="modal-overlay" on:click={() => { showSellModal = false; sellAmount = ''; sellAsset=''; }}></div>
       <div class="modal" role="dialog" aria-modal="true">
         <div class="modal-content">
-          <h3>Prodej {sellAsset === 'usd-coin' ? 'USDC' : sellAsset === 'ethereum' ? 'ETH' : 'BTC'}</h3>
+          <h3>Prodej {sellAsset}</h3>
           <div style="margin-top:8px">
             <label class="muted">Množství</label>
               <input bind:value={sellAmount} placeholder="Množství k prodeji" style="width:100%;margin-top:6px" />
