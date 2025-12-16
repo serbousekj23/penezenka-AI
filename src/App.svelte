@@ -25,6 +25,22 @@
   let showConfirmReset = false;
   let currentView = 'welcome'; // 'welcome' | 'wallet' | 'prices'
 
+  // Portfolio / virtual cash / transactions (local, fake)
+  const PORTFOLIO_KEY = 'wallet_portfolio';
+  const TX_KEY = 'wallet_txs';
+  const CASH_KEY = 'wallet_cash';
+  let portfolio = { ethereum: 0, bitcoin: 0, 'usd-coin': 0 };
+  let txs = [];
+  let virtualCash = 1000; // USD
+  let showBuyModal = false;
+  let showSettings = false;
+  let buyAssetSelect = 'ethereum';
+  let buyUsdAmount = '';
+  let sellAsset = '';
+  let sellAmount = '';
+  let showSellModal = false;
+  let settingsCash = '';
+
   // Prices fetched from CoinGecko
   let prices = {};
   let pricesLast = null;
@@ -110,6 +126,77 @@
     }
   }
 
+  // Local portfolio helpers
+  function loadState(){
+    try{
+      const p = localStorage.getItem(PORTFOLIO_KEY);
+      if(p) portfolio = JSON.parse(p);
+      const t = localStorage.getItem(TX_KEY);
+      if(t) txs = JSON.parse(t);
+      const c = localStorage.getItem(CASH_KEY);
+      if(c) virtualCash = Number(c);
+    } catch(e){ console.warn('Load state error', e); }
+  }
+
+  function saveState(){
+    try{
+      localStorage.setItem(PORTFOLIO_KEY, JSON.stringify(portfolio));
+      localStorage.setItem(TX_KEY, JSON.stringify(txs));
+      localStorage.setItem(CASH_KEY, String(virtualCash));
+    } catch(e){ console.warn('Save state error', e); }
+  }
+
+  function addTx(tx){ txs = [tx, ...txs]; saveState(); }
+
+  function openBuy(){ buyUsdAmount = ''; buyAssetSelect = 'ethereum'; showBuyModal = true; }
+
+  function closeBuy(){ showBuyModal = false; }
+
+  function openSettings(){ settingsCash = String(virtualCash); showSettings = true; }
+  function closeSettings(){ showSettings = false; }
+
+  function doBuy(){
+    error = '';
+    const usd = Number(buyUsdAmount);
+    if(!usd || usd <= 0){ error = 'Zadejte částku USD větší než 0'; return; }
+    if(usd > virtualCash){ error = 'Nedostatek virtuálních prostředků'; return; }
+    const price = prices?.[buyAssetSelect]?.usd;
+    if(!price){ error = 'Cena není načtena'; return; }
+    const qty = usd / price;
+    portfolio[buyAssetSelect] = (portfolio[buyAssetSelect] || 0) + qty;
+    virtualCash = Number((virtualCash - usd).toFixed(2));
+    const tx = { type:'buy', asset: buyAssetSelect, qty, usd, price, time: Date.now() };
+    addTx(tx);
+    saveState();
+    showBuyModal = false;
+    buyUsdAmount = '';
+  }
+
+  function doSell(){
+    error = '';
+    const amt = Number(sellAmount);
+    if(!amt || amt <= 0){ error = 'Zadejte množství k prodeji'; return; }
+    if(!sellAsset){ error = 'Vyberte aktivum'; return; }
+    if((portfolio[sellAsset] || 0) < amt){ error = 'Nedostatečný počet měny'; return; }
+    const price = prices?.[sellAsset]?.usd;
+    if(!price){ error = 'Cena není načtena'; return; }
+    const usd = Number((amt * price).toFixed(2));
+    portfolio[sellAsset] = Math.max(0, (portfolio[sellAsset] || 0) - amt);
+    virtualCash = Number((virtualCash + usd).toFixed(2));
+    const tx = { type:'sell', asset: sellAsset, qty: amt, usd, price, time: Date.now() };
+    addTx(tx);
+    saveState();
+    sellAmount = '';
+    sellAsset = '';
+  }
+
+  function setVirtualCash(v){
+    const n = Number(v);
+    if(isNaN(n) || n < 0) return;
+    virtualCash = n;
+    saveState();
+  }
+
   // --- Auth helpers ---
   function buf2hex(buffer){
     return Array.prototype.map.call(new Uint8Array(buffer), x => ('00' + x.toString(16)).slice(-2)).join('');
@@ -135,6 +222,8 @@
       isAuthenticated = true;
       currentUser = regUsername;
       currentView = 'welcome';
+      // load portfolio state after registration
+      loadState();
       // clear reg inputs
       regUsername = '';
       regPassword = '';
@@ -156,6 +245,7 @@
         isAuthenticated = true;
         currentUser = loginUsername;
         currentView = 'welcome';
+        loadState();
         loginUsername = '';
         loginPassword = '';
       } else {
@@ -249,6 +339,37 @@
       </div>
     {/if}
 
+    {#if currentView === 'transactions'}
+      <div class="card">
+        <h2>Transakce</h2>
+        <p class="muted">Seznam nákupů a prodejů (virtuální)</p>
+        <div style="margin-top:12px">
+          {#if txs.length === 0}
+            <div class="muted">Žádné transakce</div>
+          {:else}
+            <table style="width:100%;border-collapse:collapse">
+              <thead>
+                <tr style="text-align:left;border-bottom:1px solid rgba(255,255,255,0.04)"><th>Typ</th><th>Asset</th><th>Množství</th><th>USD</th><th>Cena</th><th>Čas</th></tr>
+              </thead>
+              <tbody>
+                {#each txs as t}
+                  <tr style="height:40px;border-bottom:1px solid rgba(255,255,255,0.02)">
+                    <td>{t.type === 'buy' ? 'Nákup' : 'Prodej'}</td>
+                    <td>{t.asset === 'usd-coin' ? 'USDC' : t.asset === 'ethereum' ? 'ETH' : 'BTC'}</td>
+                    <td>{t.qty.toFixed(6)}</td>
+                    <td>${t.usd}</td>
+                    <td>${t.price}</td>
+                    <td>{new Date(t.time).toLocaleString()}</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          {/if}
+        </div>
+        <div style="margin-top:12px" class="row"><button on:click={() => currentView = 'welcome'}>Zpět</button></div>
+      </div>
+    {/if}
+
     {#if currentView === 'prices'}
       <div class="card">
         <h2>Souhrn cen</h2>
@@ -265,83 +386,34 @@
 
     {#if currentView === 'wallet'}
       <div class="card">
-        <h2>Svelte Crypto Wallet</h2>
-        <p class="muted">Jednoduchá demo peněženka pro generování/import adres (nepoužívejte v produkci bez auditu).</p>
-
-        <div class="field row">
-          <button on:click={createNewWallet}>Nová peněženka</button>
-          <button on:click={reset}>Vyčistit</button>
-          <div style="margin-left:auto">
-            <button on:click={logout}>Odhlásit</button>
-          </div>
+        <h2>Portfolio</h2>
+        <p class="muted">Virtuální hotovost: <strong>${virtualCash} USD</strong></p>
+        <table style="width:100%;margin-top:12px;border-collapse:collapse">
+          <thead>
+            <tr style="text-align:left;border-bottom:1px solid rgba(255,255,255,0.04)">
+              <th>Asset</th>
+              <th>Množství</th>
+              <th>Cena (USD)</th>
+              <th>Hodnota (USD)</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each Object.keys(portfolio) as a}
+              <tr style="border-bottom:1px solid rgba(255,255,255,0.02);height:44px">
+                <td style="text-transform:capitalize">{a === 'usd-coin' ? 'USDC' : a === 'ethereum' ? 'ETH' : 'BTC'}</td>
+                <td>{(portfolio[a] || 0).toFixed(6)}</td>
+                <td>{prices[a] ? `$${prices[a].usd}` : '—'}</td>
+                <td>{prices[a] ? `$${((portfolio[a]||0) * prices[a].usd).toFixed(2)}` : '—'}</td>
+                <td><button class="link" on:click={() => { sellAsset = a; showSellModal = true; }}>Prodat</button></td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+        <div style="margin-top:12px" class="row">
+          <button on:click={openBuy}>Koupit</button>
+          <button on:click={() => currentView = 'transactions'} style="margin-left:auto">Zobrazit transakce</button>
         </div>
-
-        <div class="field card">
-          <label class="muted">Import private key</label>
-          <div class="row" style="margin-top:8px">
-            <input bind:value={importKeyInput} placeholder="0x... nebo bez 0x" style="flex:1" />
-            <button on:click={importPrivateKey}>Import</button>
-          </div>
-        </div>
-
-        <div class="field card" style="margin-top:12px">
-          <label class="muted">Import mnemonic (seed phrase)</label>
-          <div class="row" style="margin-top:8px">
-            <input bind:value={importMnemonicInput} placeholder="slovo1 slovo2 ..." style="flex:1" />
-            <button on:click={importMnemonic}>Import</button>
-          </div>
-        </div>
-
-        {#if address}
-          <div class="field" style="margin-top:12px">
-            <div class="muted">Adresa</div>
-            <div class="mono">{address}</div>
-          </div>
-        {/if}
-
-        {#if balance !== null}
-          <div class="field">
-            <div class="muted">Balance ({network})</div>
-            <div class="mono">{balance} ETH {#if balanceUSD} · ≈ ${balanceUSD} USD{/if}</div>
-          </div>
-        {/if}
-
-        <div class="field card" style="margin-top:12px">
-          <div class="muted">Tržní ceny (zdroj: CoinGecko)</div>
-          <div style="margin-top:8px">
-            <div class="row" style="justify-content:space-between">
-              <div class="muted">Asset</div>
-              <div class="muted">Cena (USD)</div>
-            </div>
-            <div style="margin-top:8px">
-              <div class="row" style="justify-content:space-between"><div>Ethereum (ETH)</div><div class="mono">{prices.ethereum ? `$${prices.ethereum.usd}` : '—'}</div></div>
-              <div class="row" style="justify-content:space-between"><div>Bitcoin (BTC)</div><div class="mono">{prices.bitcoin ? `$${prices.bitcoin.usd}` : '—'}</div></div>
-              <div class="row" style="justify-content:space-between"><div>USD Coin (USDC)</div><div class="mono">{prices['usd-coin'] ? `$${prices['usd-coin'].usd}` : '—'}</div></div>
-            </div>
-            <div class="muted" style="margin-top:8px;font-size:12px">Aktualizováno: {pricesLast || '—'}</div>
-          </div>
-        </div>
-
-        <div class="field" style="margin-top:8px">
-          <label><input type="checkbox" bind:checked={showPrivate} /> Ukázat privátní klíč / mnemonic</label>
-        </div>
-
-        {#if showPrivate}
-          <div class="field">
-            <div class="muted">Private Key</div>
-            <div class="mono">{privateKey || '—'}</div>
-          </div>
-          <div class="field">
-            <div class="muted">Mnemonic / Seed</div>
-            <div class="mono">{mnemonic || '—'}</div>
-          </div>
-        {/if}
-
-        {#if error}
-          <div class="field" style="color:#ffb4b4">Chyba: {error}</div>
-        {/if}
-
-        <p class="muted" style="margin-top:12px">Upozornění: Tento demo projekt zobrazuje privátní klíče v UI — nikdy nesdílejte své klíče a nepoužívejte tuto ukázku s reálnými prostředky bez auditů.</p>
       </div>
     {/if}
 
@@ -357,8 +429,9 @@
       <nav>
         <ul>
           <li><button on:click={() => { showSidebar = false; currentView = 'wallet'; }}>Přehled zůstatků</button></li>
-          <li><button on:click={() => { showSidebar = false; currentView = 'wallet'; }}>Transakce (ukázka)</button></li>
-          <li><button on:click={() => { showSidebar = false; currentView = 'wallet'; }}>Nastavení</button></li>
+          <li><button on:click={() => { showSidebar = false; currentView = 'transactions'; }}>Transakce</button></li>
+          <li><button on:click={() => { showSidebar = false; openBuy(); }}>Zakoupit</button></li>
+          <li><button on:click={() => { showSidebar = false; openSettings(); }}>Nastavení</button></li>
           <li><button on:click={() => { showConfirmReset = true; }}>Reset účtu</button></li>
         </ul>
       </nav>
@@ -373,6 +446,66 @@
           <div class="modal-actions">
             <button on:click={doReset}>Ano, smazat</button>
             <button class="link" on:click={cancelReset}>Zrušit</button>
+          </div>
+        </div>
+      </div>
+    {/if}
+
+    {#if showBuyModal}
+      <div class="modal-overlay" on:click={closeBuy}></div>
+      <div class="modal" role="dialog" aria-modal="true">
+        <div class="modal-content">
+          <h3>Nákup (virtuální)</h3>
+          <div style="margin-top:8px">
+            <label class="muted">Asset</label>
+            <select bind:value={buyAssetSelect} style="width:100%;margin-top:6px">
+              <option value="ethereum">Ethereum (ETH)</option>
+              <option value="bitcoin">Bitcoin (BTC)</option>
+              <option value="usd-coin">USD Coin (USDC)</option>
+            </select>
+            <label class="muted" style="margin-top:8px">Částka k utracení (USD)</label>
+            <input bind:value={buyUsdAmount} placeholder="USD" style="width:100%;margin-top:6px" />
+            <div class="muted" style="margin-top:8px">{#if prices[buyAssetSelect]}Přibližně {(buyUsdAmount && !isNaN(Number(buyUsdAmount)) ? (Number(buyUsdAmount)/prices[buyAssetSelect].usd).toFixed(6) : '—')} {buyAssetSelect === 'usd-coin' ? 'USDC' : buyAssetSelect === 'ethereum' ? 'ETH' : 'BTC'}{/if}</div>
+          </div>
+          <div class="modal-actions">
+            <button on:click={doBuy}>Koupit</button>
+            <button class="link" on:click={closeBuy}>Zrušit</button>
+          </div>
+        </div>
+      </div>
+    {/if}
+
+    {#if showSellModal}
+      <div class="modal-overlay" on:click={() => { showSellModal = false; sellAmount = ''; sellAsset=''; }}></div>
+      <div class="modal" role="dialog" aria-modal="true">
+        <div class="modal-content">
+          <h3>Prodej {sellAsset === 'usd-coin' ? 'USDC' : sellAsset === 'ethereum' ? 'ETH' : 'BTC'}</h3>
+          <div style="margin-top:8px">
+            <label class="muted">Množství</label>
+            <input bind:value={sellAmount} placeholder="Množství k prodeji" style="width:100%;margin-top:6px" />
+            <div class="muted" style="margin-top:8px">{#if prices[sellAsset]}Přibližně {(sellAmount && !isNaN(Number(sellAmount)) ? (Number(sellAmount)*prices[sellAsset].usd).toFixed(2) : '—')} USD{/if}</div>
+          </div>
+          <div class="modal-actions">
+            <button on:click={() => { doSell(); showSellModal = false; }}>Prodat</button>
+            <button class="link" on:click={() => { showSellModal = false; sellAmount=''; sellAsset=''; }}>Zrušit</button>
+          </div>
+        </div>
+      </div>
+    {/if}
+
+    {#if showSettings}
+      <div class="modal-overlay" on:click={closeSettings}></div>
+      <div class="modal" role="dialog" aria-modal="true">
+        <div class="modal-content">
+          <h3>Nastavení</h3>
+          <div style="margin-top:8px">
+            <label class="muted">Virtuální hotovost (USD)</label>
+            <input bind:value={settingsCash} placeholder="Např. 1000" style="width:100%;margin-top:6px" />
+            <div class="muted" style="margin-top:8px">Aktuální: {virtualCash} USD</div>
+          </div>
+          <div class="modal-actions">
+            <button on:click={() => { setVirtualCash(settingsCash); closeSettings(); }}>Uložit</button>
+            <button class="link" on:click={closeSettings}>Zrušit</button>
           </div>
         </div>
       </div>
