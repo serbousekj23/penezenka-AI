@@ -35,7 +35,7 @@
   let showBuyModal = false;
   let showSettings = false;
   let buyAssetSelect = 'ethereum';
-  let buyUsdAmount = '';
+  let buyQty = '';
   let sellAsset = '';
   let sellAmount = '';
   let showSellModal = false;
@@ -148,7 +148,7 @@
 
   function addTx(tx){ txs = [tx, ...txs]; saveState(); }
 
-  function openBuy(){ buyUsdAmount = ''; buyAssetSelect = 'ethereum'; showBuyModal = true; }
+  function openBuy(){ buyQty = ''; buyAssetSelect = 'ethereum'; showBuyModal = true; }
 
   function closeBuy(){ showBuyModal = false; }
 
@@ -157,19 +157,19 @@
 
   function doBuy(){
     error = '';
-    const usd = Number(buyUsdAmount);
-    if(!usd || usd <= 0){ error = 'Zadejte částku USD větší než 0'; return; }
-    if(usd > virtualCash){ error = 'Nedostatek virtuálních prostředků'; return; }
+    const qty = Number(buyQty);
+    if(!qty || qty <= 0){ error = 'Zadejte množství aktiva větší než 0'; return; }
     const price = prices?.[buyAssetSelect]?.usd;
     if(!price){ error = 'Cena není načtena'; return; }
-    const qty = usd / price;
+    const usd = Number((qty * price).toFixed(2));
+    if(usd > virtualCash){ error = 'Nedostatek virtuálních prostředků'; return; }
     portfolio[buyAssetSelect] = (portfolio[buyAssetSelect] || 0) + qty;
     virtualCash = Number((virtualCash - usd).toFixed(2));
     const tx = { type:'buy', asset: buyAssetSelect, qty, usd, price, time: Date.now() };
     addTx(tx);
     saveState();
     showBuyModal = false;
-    buyUsdAmount = '';
+    buyQty = '';
   }
 
   function doSell(){
@@ -324,6 +324,7 @@
       <div class="topbar-title">Svelte Crypto Wallet</div>
       <div class="user-area">
         <div class="avatar">{currentUser ? currentUser[0].toUpperCase() : '?'}</div>
+        <div class="cash-inline">{virtualCash} USD</div>
         <button class="link" on:click={logout}>Odhlásit</button>
       </div>
     </div>
@@ -463,9 +464,9 @@
               <option value="bitcoin">Bitcoin (BTC)</option>
               <option value="usd-coin">USD Coin (USDC)</option>
             </select>
-            <label class="muted" style="margin-top:8px">Částka k utracení (USD)</label>
-            <input bind:value={buyUsdAmount} placeholder="USD" style="width:100%;margin-top:6px" />
-            <div class="muted" style="margin-top:8px">{#if prices[buyAssetSelect]}Přibližně {(buyUsdAmount && !isNaN(Number(buyUsdAmount)) ? (Number(buyUsdAmount)/prices[buyAssetSelect].usd).toFixed(6) : '—')} {buyAssetSelect === 'usd-coin' ? 'USDC' : buyAssetSelect === 'ethereum' ? 'ETH' : 'BTC'}{/if}</div>
+            <label class="muted" style="margin-top:8px">Množství aktiva k nákupu</label>
+            <input bind:value={buyQty} placeholder="např. 0.01" style="width:100%;margin-top:6px" />
+            <div class="muted" style="margin-top:8px">{#if prices[buyAssetSelect]}Přibližná cena: {(buyQty && !isNaN(Number(buyQty)) ? (Number(buyQty)*prices[buyAssetSelect].usd).toFixed(2) : '—')} USD{/if}</div>
           </div>
           <div class="modal-actions">
             <button on:click={doBuy}>Koupit</button>
