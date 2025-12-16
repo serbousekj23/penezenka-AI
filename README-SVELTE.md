@@ -17,6 +17,7 @@ Funkce:
 - Generování nové peněženky (mnemonic + private key)
 - Import pomocí private key nebo mnemonic
 - Načtení ETH zůstatku z veřejného provideru (default provider)
+ - Zobrazení tržních cen (ETH, BTC, USDC) a přepočet ETH zůstatku na USD (CoinGecko)
 
 Další kroky:
 - Přidat šifrování seedů v lokálním úložišti

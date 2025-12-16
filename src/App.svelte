@@ -6,9 +6,14 @@
   let privateKey = '';
   let mnemonic = '';
   let balance = null;
+  let balanceUSD = null;
   let network = 'homestead';
   let error = '';
   let provider = null;
+
+  // Prices fetched from CoinGecko
+  let prices = {};
+  let pricesLast = null;
 
   let importKeyInput = '';
   let importMnemonicInput = '';
@@ -64,11 +69,39 @@
       provider = getDefaultProvider(network);
       const b = await provider.getBalance(address);
       balance = Number(b) / 1e18;
+      // If ETH price available, compute USD equivalent
+      if(prices?.ethereum?.usd) {
+        balanceUSD = (balance * prices.ethereum.usd).toFixed(2);
+      } else {
+        balanceUSD = null;
+      }
     } catch(e){ error = 'Could not fetch balance: ' + e.message }
+  }
+
+  async function fetchPrices(){
+    try{
+      // CoinGecko simple price endpoint (no API key required)
+      const res = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=ethereum,bitcoin,usd-coin&vs_currencies=usd');
+      if(!res.ok) throw new Error('Price fetch failed');
+      const data = await res.json();
+      prices = data;
+      pricesLast = new Date().toLocaleTimeString();
+      // update balanceUSD if we have an ETH balance
+      if(balance !== null && prices?.ethereum?.usd){
+        balanceUSD = (balance * prices.ethereum.usd).toFixed(2);
+      }
+    } catch(e){
+      // don't block UI on price fetch errors
+      console.warn('Price fetch error', e);
+    }
   }
 
   onMount(()=>{
     provider = getDefaultProvider(network);
+    fetchPrices();
+    // refresh prices every 30 seconds
+    const tid = setInterval(fetchPrices, 30000);
+    return ()=> clearInterval(tid);
   });
 </script>
 
@@ -116,9 +149,25 @@
     {#if balance !== null}
       <div class="field">
         <div class="muted">Balance ({network})</div>
-        <div class="mono">{balance} ETH</div>
+        <div class="mono">{balance} ETH {#if balanceUSD} · ≈ ${balanceUSD} USD{/if}</div>
       </div>
     {/if}
+
+    <div class="field card" style="margin-top:12px">
+      <div class="muted">Tržní ceny (zdroj: CoinGecko)</div>
+      <div style="margin-top:8px">
+        <div class="row" style="justify-content:space-between">
+          <div class="muted">Asset</div>
+          <div class="muted">Cena (USD)</div>
+        </div>
+        <div style="margin-top:8px">
+          <div class="row" style="justify-content:space-between"><div>Ethereum (ETH)</div><div class="mono">{prices.ethereum ? `$${prices.ethereum.usd}` : '—'}</div></div>
+          <div class="row" style="justify-content:space-between"><div>Bitcoin (BTC)</div><div class="mono">{prices.bitcoin ? `$${prices.bitcoin.usd}` : '—'}</div></div>
+          <div class="row" style="justify-content:space-between"><div>USD Coin (USDC)</div><div class="mono">{prices['usd-coin'] ? `$${prices['usd-coin'].usd}` : '—'}</div></div>
+        </div>
+        <div class="muted" style="margin-top:8px;font-size:12px">Aktualizováno: {pricesLast || '—'}</div>
+      </div>
+    </div>
 
     <div class="field" style="margin-top:8px">
       <label><input type="checkbox" bind:checked={showPrivate} /> Ukázat privátní klíč / mnemonic</label>
