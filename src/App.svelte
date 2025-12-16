@@ -214,20 +214,7 @@
           <button on:click={logout}>Odhlásit</button>
         </div>
       </div>
-    <p class="muted">Jednoduchá demo peněženka pro generování/import adres (nepoužívejte v produkci bez auditu).</p>
-
-    <div class="field row">
-      <button on:click={createNewWallet}>Nová peněženka</button>
-      <button on:click={reset}>Vyčistit</button>
-      <div style="margin-left:auto">
-        <label class="muted">Síť:</label>
-        <select bind:value={network} on:change={fetchBalance}>
-          <option value="homestead">Mainnet</option>
-          <option value="goerli">Goerli</option>
-          <option value="sepolia">Sepolia</option>
-        </select>
-      </div>
-    </div>
+    
 
     <div class="field card">
       <label class="muted">Import private key</label>
