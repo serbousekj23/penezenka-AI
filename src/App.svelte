@@ -20,6 +20,8 @@
   let regUsername = '';
   let regPassword = '';
   let regConfirm = '';
+  let currentUser = '';
+  let showSidebar = false;
 
   // Prices fetched from CoinGecko
   let prices = {};
@@ -129,6 +131,7 @@
       const payload = { username: regUsername, hash: h };
       localStorage.setItem(AUTH_KEY, JSON.stringify(payload));
       isAuthenticated = true;
+      currentUser = regUsername;
       // clear reg inputs
       regUsername = '';
       regPassword = '';
@@ -148,6 +151,7 @@
       const h = await hashPassword(loginPassword);
       if(h === payload.hash){
         isAuthenticated = true;
+        currentUser = loginUsername;
         loginUsername = '';
         loginPassword = '';
       } else {
@@ -159,6 +163,7 @@
   function logout(){
     isAuthenticated = false;
     reset();
+    currentUser = '';
   }
 
   onMount(()=>{
@@ -203,17 +208,17 @@
   {/if}
 
   {#if isAuthenticated}
-    <div class="card">
-      <h2>Svelte Crypto Wallet</h2>
-      <p class="muted">Jednoduchá demo peněženka pro generování/import adres (nepoužívejte v produkci bez auditu).</p>
-
-      <div class="field row">
-        <button on:click={createNewWallet}>Nová peněženka</button>
-        <button on:click={reset}>Vyčistit</button>
-        <div style="margin-left:auto">
-          <button on:click={logout}>Odhlásit</button>
-        </div>
+    <!-- Topbar with menu and user area -->
+    <div class="topbar">
+      <button class="menu-btn" on:click={() => showSidebar = true} aria-label="Open menu">☰</button>
+      <div class="topbar-title">Svelte Crypto Wallet</div>
+      <div class="user-area">
+        <div class="avatar">{currentUser ? currentUser[0].toUpperCase() : '?'}</div>
+        <button class="link" on:click={logout}>Odhlásit</button>
       </div>
+    </div>
+
+    <div class="card">
     
 
     <div class="field card">
@@ -223,6 +228,25 @@
         <button on:click={importPrivateKey}>Import</button>
       </div>
     </div>
+
+    <!-- Sidebar + overlay -->
+    {#if showSidebar}
+      <div class="overlay" on:click={() => showSidebar = false}></div>
+    {/if}
+    <aside class="sidebar {showSidebar ? 'open' : ''}">
+      <div class="sidebar-header">
+        <div class="avatar small">{currentUser ? currentUser[0].toUpperCase() : '?'}</div>
+        <div style="margin-left:8px">{currentUser}</div>
+      </div>
+      <nav>
+        <ul>
+          <li><button on:click={() => { showSidebar = false; }}>Přehled zůstatků</button></li>
+          <li><button on:click={() => { showSidebar = false; }}>Transakce (ukázka)</button></li>
+          <li><button on:click={() => { showSidebar = false; }}>Nastavení</button></li>
+          <li><button on:click={() => { showSidebar = false; localStorage.removeItem(AUTH_KEY); logout(); }}>Reset účtu</button></li>
+        </ul>
+      </nav>
+    </aside>
 
     <div class="field card" style="margin-top:12px">
       <label class="muted">Import mnemonic (seed phrase)</label>
