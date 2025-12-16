@@ -22,6 +22,7 @@
   let regConfirm = '';
   let currentUser = '';
   let showSidebar = false;
+  let showConfirmReset = false;
 
   // Prices fetched from CoinGecko
   let prices = {};
@@ -166,6 +167,19 @@
     currentUser = '';
   }
 
+  function cancelReset(){
+    showConfirmReset = false;
+  }
+
+  function doReset(){
+    try{
+      localStorage.removeItem(AUTH_KEY);
+    } catch(e){ console.warn('Reset error', e); }
+    showConfirmReset = false;
+    showSidebar = false;
+    logout();
+  }
+
   onMount(()=>{
     provider = getDefaultProvider(network);
     fetchPrices();
@@ -243,10 +257,24 @@
           <li><button on:click={() => { showSidebar = false; }}>Přehled zůstatků</button></li>
           <li><button on:click={() => { showSidebar = false; }}>Transakce (ukázka)</button></li>
           <li><button on:click={() => { showSidebar = false; }}>Nastavení</button></li>
-          <li><button on:click={() => { showSidebar = false; localStorage.removeItem(AUTH_KEY); logout(); }}>Reset účtu</button></li>
+          <li><button on:click={() => { showConfirmReset = true; }}>Reset účtu</button></li>
         </ul>
       </nav>
     </aside>
+    
+    {#if showConfirmReset}
+      <div class="modal-overlay" on:click={cancelReset}></div>
+      <div class="modal" role="dialog" aria-modal="true">
+        <div class="modal-content">
+          <h3>Opravdu smazat účet?</h3>
+          <p>Tato akce smaže lokálně uložené přihlašovací údaje a odhlásí vás. Pokračovat?</p>
+          <div class="modal-actions">
+            <button on:click={doReset}>Ano, smazat</button>
+            <button class="link" on:click={cancelReset}>Zrušit</button>
+          </div>
+        </div>
+      </div>
+    {/if}
 
     <div class="field card" style="margin-top:12px">
       <label class="muted">Import mnemonic (seed phrase)</label>
