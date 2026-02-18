@@ -115,9 +115,10 @@
       provider = getDefaultProvider(network);
       const b = await provider.getBalance(address);
       balance = Number(b) / 1e18;
-      // If ETH price available, compute USD equivalent
+      // If ETH price available, compute equivalent in base currency
       if(prices?.ethereum?.usd) {
-        balanceUSD = (balance * prices.ethereum.usd).toFixed(2);
+        const rate = fiatRates[baseCurrency] || 1;
+        balanceUSD = (balance * prices.ethereum.usd * rate).toFixed(2);
       } else {
         balanceUSD = null;
       }
@@ -128,14 +129,21 @@
     try{
       // CoinGecko simple price endpoint (no API key required)
       const ids = (knownAssets && knownAssets.length) ? knownAssets.join(',') : 'ethereum,bitcoin';
-      const res = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd`);
+      const url = `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd`;
+      let res = await fetch(url);
+      if(!res.ok) {
+        // try CORS proxy fallback for local dev
+        const proxy = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+        res = await fetch(proxy);
+      }
       if(!res.ok) throw new Error('Price fetch failed');
       const data = await res.json();
       prices = data;
       pricesLast = new Date().toLocaleTimeString();
-      // update balanceUSD if we have an ETH balance
+      // update balanceUSD if we have an ETH balance (convert to base currency)
       if(balance !== null && prices?.ethereum?.usd){
-        balanceUSD = (balance * prices.ethereum.usd).toFixed(2);
+        const rate = fiatRates[baseCurrency] || 1;
+        balanceUSD = (balance * prices.ethereum.usd * rate).toFixed(2);
       }
     } catch(e){
       // don't block UI on price fetch errors
@@ -156,6 +164,8 @@
       const savedCurrency = localStorage.getItem(CURRENCY_KEY + userSuffix) || localStorage.getItem(CURRENCY_KEY) || 'USD';
       baseCurrency = savedCurrency;
       if(c) virtualCash = Number(c);
+      // remember previous currency so conversions work
+      prevCurrency = baseCurrency;
       // knownAssets is a fixed list; do not load user-added assets
     } catch(e){ console.warn('Load state error', e); }
   }
@@ -177,8 +187,17 @@
 
   function closeBuy(){ showBuyModal = false; }
 
-  function openSettings(){ settingsCash = String(virtualCash); showSettings = true; }
+  function openSettings(){ settingsCash = String(virtualCash); prevCurrency = baseCurrency; showSettings = true; }
   function closeSettings(){ showSettings = false; }
+
+  // Ensure rates are fresh when opening settings
+  function openSettingsWithRates(){
+    settingsCash = String(virtualCash);
+    prevCurrency = baseCurrency;
+    // refresh fiat rates so conversion will work
+    fetchFiatRates().catch(e => console.warn('Rates refresh failed', e));
+    showSettings = true;
+  }
 
   function doBuy(){
     error = '';
@@ -225,24 +244,55 @@
   // Fetch fiat exchange rates (USD base)
   async function fetchFiatRates(){
     try{
-      const res = await fetch('https://api.exchangerate.host/latest?base=USD&symbols=USD,EUR,CZK');
-      if(!res.ok) throw new Error('Fiat rates fetch failed');
-      const data = await res.json();
-      fiatRates = data.rates || { USD:1 };
-    } catch(e){ console.warn('Fiat rates error', e); fiatRates = { USD:1 }; }
+      // Try free endpoint first
+      let data = null;
+      try{
+        const res1 = await fetch('https://open.er-api.com/v6/latest/USD');
+        if(res1.ok) data = await res1.json();
+        console.log('fetchFiatRates: tried open.er-api, ok=', !!data);
+      }catch(e){ console.warn('fetchFiatRates: open.er-api failed', e); }
+      // fallback to exchangerate.host if needed
+      if(!data){
+        try{
+          const res2 = await fetch('https://api.exchangerate.host/latest?base=USD&symbols=USD,EUR,CZK');
+          if(res2.ok) data = await res2.json();
+          console.log('fetchFiatRates: tried exchangerate.host, ok=', !!data);
+        }catch(e){ console.warn('fetchFiatRates: exchangerate.host failed', e); }
+      }
+      // If we still don't have data, set safe defaults
+      let src = {};
+      if(data && data.rates) src = data.rates;
+      else if(data && data.result && data.rates) src = data.rates; // some APIs
+      // Normalize keys and ensure numeric values
+      fiatRates = {
+        USD: Number(src.USD) || Number(src.Usd) || Number(src.usd) || 1,
+        EUR: Number(src.EUR) || Number(src.Eur) || Number(src.eur) || 1,
+        CZK: Number(src.CZK) || Number(src.Czk) || Number(src.czk) || 1
+      };
+      console.log('fetchFiatRates: raw=', JSON.stringify(data));
+      console.log('fetchFiatRates: rates=', JSON.stringify(fiatRates));
+    } catch(e){ console.warn('Fiat rates error', e); fiatRates = { USD:1, EUR:1, CZK:1 }; }
   }
 
   function formatCurrency(amount){
-    const sym = baseCurrency === 'USD' ? '$' : baseCurrency === 'EUR' ? '€' : 'Kč';
     if(amount == null) return `- ${baseCurrency}`;
-    return `${sym}${Number(amount).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+    const num = Number(amount).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+    if(baseCurrency === 'USD') return `$${num}`;
+    if(baseCurrency === 'EUR') return `€${num}`;
+    // CZK and others: place symbol after number
+    return `${num} Kč`;
   }
 
   // Charts: fetch historical market data from CoinGecko (prices in USD) and store
   async function fetchChartData(asset, days){
     histPrices = [];
     try{
-      const res = await fetch(`https://api.coingecko.com/api/v3/coins/${asset}/market_chart?vs_currency=usd&days=${days}`);
+      const url = `https://api.coingecko.com/api/v3/coins/${asset}/market_chart?vs_currency=usd&days=${days}`;
+      let res = await fetch(url);
+      if(!res.ok){
+        const proxy = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+        res = await fetch(proxy);
+      }
       if(!res.ok) throw new Error('Chart fetch failed');
       const data = await res.json();
       // data.prices is [[ts, price], ...]
@@ -389,6 +439,31 @@
     const tid = setInterval(fetchPrices, 30000);
     return ()=> clearInterval(tid);
   });
+
+  // Convert stored virtualCash and histPrices when baseCurrency changes.
+  async function convertBaseCurrency(){
+    if(!prevCurrency || prevCurrency === baseCurrency) return;
+    try{
+      // refresh rates to ensure we have the latest values
+      await fetchFiatRates();
+      const prevRate = fiatRates[prevCurrency] || 1;
+      const newRate = fiatRates[baseCurrency] || 1;
+      console.log('convertBaseCurrency: prevCurrency=', prevCurrency, 'baseCurrency=', baseCurrency, 'prevRate=', prevRate, 'newRate=', newRate, 'virtualCash(before)=', virtualCash);
+      // if rates are identical or zero, skip
+      if(!prevRate || !newRate || prevRate === newRate){ prevCurrency = baseCurrency; return; }
+      const usdEquivalent = virtualCash / prevRate;
+      virtualCash = Number((usdEquivalent * newRate).toFixed(2));
+      console.log('convertBaseCurrency: virtualCash(after)=', virtualCash);
+      if(histPrices && histPrices.length){
+        histPrices = histPrices.map(h => ({ t: h.t, v: Number((h.v * (newRate/prevRate)).toFixed(6)) }));
+      }
+      prevCurrency = baseCurrency;
+      saveState();
+    }catch(e){ console.warn('Currency convert error', e); }
+  }
+
+  // Trigger async conversion when baseCurrency changes
+  $: if(prevCurrency && baseCurrency && prevCurrency !== baseCurrency){ convertBaseCurrency(); }
 </script>
 
 <div class="container">
@@ -504,17 +579,17 @@
           {:else}
             <table style="width:100%;border-collapse:collapse">
               <thead>
-                <tr style="text-align:left;border-bottom:1px solid rgba(255,255,255,0.04)"><th>Typ</th><th>Asset</th><th>Množství</th><th>USD</th><th>Cena</th><th>Čas</th></tr>
+                <tr style="text-align:left;border-bottom:1px solid rgba(255,255,255,0.04)"><th>Typ</th><th>Asset</th><th>Množství</th><th>{baseCurrency}</th><th>Cena ({baseCurrency})</th><th>Čas</th></tr>
               </thead>
               <tbody>
                 {#each txs as t}
                   <tr style="height:40px;border-bottom:1px solid rgba(255,255,255,0.02)">
-                    <td>{t.type === 'buy' ? 'Nákup' : 'Prodej'}</td>
-                    <td>{t.asset}</td>
-                    <td>{t.qty.toFixed(6)}</td>
-                    <td>{t.usd ? `$${t.usd}` : '—'}</td>
-                    <td>{t.priceUSD ? `$${t.priceUSD}` : (t.price ? `$${t.price}` : '—')}</td>
-                    <td>{new Date(t.time).toLocaleString()}</td>
+                      <td>{t.type === 'buy' ? 'Nákup' : 'Prodej'}</td>
+                      <td>{t.asset}</td>
+                      <td>{t.qty.toFixed(6)}</td>
+                      <td>{t.usd ? formatCurrency(t.usd * (fiatRates[baseCurrency] || 1)) : '—'}</td>
+                      <td>{t.priceUSD ? formatCurrency(t.priceUSD * (fiatRates[baseCurrency] || 1)) : (t.price ? formatCurrency(t.price * (fiatRates[baseCurrency] || 1)) : '—')}</td>
+                      <td>{new Date(t.time).toLocaleString()}</td>
                   </tr>
                 {/each}
               </tbody>
@@ -591,7 +666,7 @@
           <li><button on:click={() => { showSidebar = false; currentView = 'transactions'; }}>Transakce</button></li>
           <li><button on:click={() => { showSidebar = false; currentView = 'charts'; }}>Grafy</button></li>
           <li><button on:click={() => { showSidebar = false; openBuy(); }}>Zakoupit</button></li>
-          <li><button on:click={() => { showSidebar = false; openSettings(); }}>Nastavení</button></li>
+          <li><button on:click={() => { showSidebar = false; openSettingsWithRates(); }}>Nastavení</button></li>
           <li><button on:click={() => { showConfirmReset = true; }}>Reset účtu</button></li>
         </ul>
       </nav>
@@ -673,7 +748,7 @@
             <div class="muted" style="margin-top:8px">Aktuální zůstatek: {formatCurrency(virtualCash)}</div>
           </div>
           <div class="modal-actions">
-            <button on:click={() => { saveState(); closeSettings(); }}>Uložit</button>
+            <button on:click={async () => { await convertBaseCurrency(); saveState(); closeSettings(); }}>Uložit</button>
             <button class="link" on:click={closeSettings}>Zrušit</button>
           </div>
         </div>
