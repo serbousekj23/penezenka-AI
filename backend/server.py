@@ -1,5 +1,3 @@
-# Jednoduchý backend pro správu kryptoměn uživatele
-
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from pymongo import MongoClient
@@ -8,15 +6,13 @@ import os
 app = Flask(__name__)
 CORS(app)
 
-# MongoDB connection string from environment variable or default localhost
+# MongoDB connection string from environment variable
 MONGO_URI = os.environ.get('MONGO_URI', 'mongodb://localhost:27017/')
 client = MongoClient(MONGO_URI)
 db = client['crypto_db']
 users_col = db['users']
 holdings_col = db['holdings']
 
-
-# Vytvoření uživatele
 @app.route('/api/user', methods=['POST'])
 def create_user():
     data = request.json
@@ -29,8 +25,6 @@ def create_user():
     result = users_col.insert_one(user)
     return jsonify({'id': str(result.inserted_id), 'username': username})
 
-
-# Získání kryptoměn uživatele
 @app.route('/api/holdings/<username>', methods=['GET'])
 def get_holdings(username):
     user = users_col.find_one({'username': username})
@@ -39,8 +33,6 @@ def get_holdings(username):
     holdings = list(holdings_col.find({'username': username}, {'_id': 0}))
     return jsonify({'username': username, 'holdings': holdings})
 
-
-# Přidání kryptoměny uživateli
 @app.route('/api/holdings/<username>', methods=['POST'])
 def add_holding(username):
     data = request.json
@@ -57,4 +49,5 @@ def add_holding(username):
     return jsonify({'message': 'Holding added'})
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    port = int(os.environ.get('PORT', 5000))  # Render poskytuje port dynamicky
+    app.run(host='0.0.0.0', port=port, debug=False)  # 0.0.0.0 = dostupné z Renderu
